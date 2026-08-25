@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://phonixying.github.io/PetLoss/sitemap.xml
+Sitemap: https://petloss.app/sitemap.xml
