@@ -9,6 +9,89 @@ const TO_EMAIL = 'friends@petloss.app';
 const FROM_EMAIL = 'PetLoss 官網 <support@petloss.app>';
 const MAX_MESSAGE = 4000;
 
+// ── 首頁語言自動跳轉 ──────────────────────────────
+const LOCALE_PREFIXES = ['/', '/zh/', '/en/', '/pt/', '/ru/', '/es/', '/ko/', '/fa/', '/ja/'];
+const FALLBACK_PREFIX = '/en/';
+const LANG_TO_PREFIX = {
+  en: '/en/',
+  pt: '/pt/',
+  ru: '/ru/',
+  es: '/es/',
+  ko: '/ko/',
+  fa: '/fa/',
+  ja: '/ja/',
+};
+
+function getCookie(header, name) {
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    if (part.slice(0, index).trim() === name) {
+      return decodeURIComponent(part.slice(index + 1).trim());
+    }
+  }
+  return null;
+}
+
+function pickLocalePrefix(acceptLanguage) {
+  const ranked = acceptLanguage
+    .split(',')
+    .map((part) => {
+      const [tag, ...params] = part.trim().split(';');
+      let q = 1;
+      for (const param of params) {
+        const match = param.trim().match(/^q=([0-9.]+)$/);
+        if (match) q = Number.parseFloat(match[1]);
+      }
+      return { tag: tag.trim().toLowerCase(), q };
+    })
+    .filter(({ tag }) => tag && tag !== '*')
+    .sort((a, b) => b.q - a.q);
+
+  for (const { tag } of ranked) {
+    if (tag.startsWith('zh')) {
+      // 繁體中文（root） / 简体中文（/zh/）
+      return /hant|tw|hk|mo/.test(tag) ? '/' : '/zh/';
+    }
+    const base = tag.split('-')[0];
+    if (LANG_TO_PREFIX[base]) return LANG_TO_PREFIX[base];
+  }
+  return FALLBACK_PREFIX;
+}
+
+function localeRedirect(url, prefix) {
+  const target = new URL(url.toString());
+  target.pathname = prefix;
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: target.toString(),
+      vary: 'Accept-Language',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+function serveAssets(request, env, url) {
+  const isHome = url.pathname === '/' || url.pathname === '/index.html';
+  if (isHome && (request.method === 'GET' || request.method === 'HEAD')) {
+    const saved = getCookie(request.headers.get('cookie'), 'pl_lang');
+    if (saved && LOCALE_PREFIXES.includes(saved)) {
+      // 使用者手動選過語言，尊重其選擇
+      if (saved !== '/') return localeRedirect(url, saved);
+    } else {
+      const acceptLanguage = request.headers.get('accept-language');
+      // 沒有 Accept-Language（多數爬蟲）時不跳轉，確保 / 可被抓取
+      if (acceptLanguage) {
+        const prefix = pickLocalePrefix(acceptLanguage);
+        if (prefix !== '/') return localeRedirect(url, prefix);
+      }
+    }
+  }
+  return env.ASSETS.fetch(new Request(url, request));
+}
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -125,10 +208,10 @@ export default {
     // /PetLoss 或 /PetLoss/xxx → / 或 /xxx（历史产物兼容）
     if (path === PREFIX || path.startsWith(`${PREFIX}/`)) {
       url.pathname = path.slice(PREFIX.length) || '/';
-      return env.ASSETS.fetch(new Request(url, request));
+      return serveAssets(request, env, url);
     }
 
-    // 其余请求原样交给静态资源服务
-    return env.ASSETS.fetch(request);
+    // 其余请求交给静态资源服务（首页会依系统语言自动跳转）
+    return serveAssets(request, env, url);
   },
 };
